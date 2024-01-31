@@ -1,19 +1,23 @@
 #![allow(dead_code)]
 
+use std::fmt::Write;
+
 /// Custom Minheap built on top of an unsafe ring buffer.
 ///
 /// As an important implementation detail when reading this code: The ring
 /// buffer part is based on [Vec], and its length is used as the ring buffer
 /// capacity.
-#[derive(Debug, Clone)]
-pub struct RingHeap<T: Copy + std::cmp::PartialOrd> {
+#[derive(Clone)]
+pub struct RingHeap<T: Copy + std::cmp::PartialOrd, const D: i8> {
     data: Vec<T>,
     start: usize,
     end: usize,
     len: usize,
 }
 
-impl<T: Copy + std::cmp::PartialOrd + std::fmt::Debug> RingHeap<T> {
+impl<T: Copy + std::cmp::PartialOrd + std::fmt::Debug, const D: i8> RingHeap<T, D> {
+    const OK: () = assert!(D == -1 || D == 1, "must be set to either -1 or 1");
+
     /// Construct an empty [RingHeap].
     pub fn new() -> Self {
         Self::with_capacity(1)
@@ -41,13 +45,9 @@ impl<T: Copy + std::cmp::PartialOrd + std::fmt::Debug> RingHeap<T> {
     /// Insert a new item into the [RingHeap]
     pub fn insert(&mut self, x: T) {
         self.push(x);
-        // let idx = if self.end == 0 {
-        //     self.data.len() - 1
-        // } else {
-        //     self.end - 1
-        // };
-        // self.heapify_up(idx);
-        self.heapify_up(self.data.len() - 1);
+        // NOTE: this subtractiont is safe from overflows, since  we just
+        // increased the len of the virtual heap.
+        self.heapify_up(self.len - 1);
     }
 
     /// Returns an [Option] of the smallest item in the [RingHeap].
@@ -109,16 +109,20 @@ impl<T: Copy + std::cmp::PartialOrd + std::fmt::Debug> RingHeap<T> {
     }
 
     fn heapify_up(&mut self, i: usize) {
-        if i == self.start {
+        if i == 0 {
             return;
         }
         let parent_idx = Self::parent_idx(i);
-        dbg!(parent_idx);
-        dbg!(i);
-        dbg!(self.data.len());
-        if self.get(parent_idx) > self.get(i) {
-            self.swap(i, parent_idx);
-            self.heapify_up(parent_idx);
+        if D == -1 {
+            if self.get(parent_idx) > self.get(i) {
+                self.swap(i, parent_idx);
+                self.heapify_up(parent_idx);
+            }
+        } else if D == 1 {
+            if self.get(parent_idx) < self.get(i) {
+                self.swap(i, parent_idx);
+                self.heapify_up(parent_idx);
+            }
         }
     }
 
@@ -132,20 +136,37 @@ impl<T: Copy + std::cmp::PartialOrd + std::fmt::Debug> RingHeap<T> {
         let left_val = self.get(left_child_idx);
         let this_val = self.get(i);
         if right_child_idx >= self.len {
-            if this_val > left_val {
-                self.swap(i, left_child_idx);
-                self.heapify_down(left_child_idx);
+            if D == -1 {
+                if this_val > left_val {
+                    self.swap(i, left_child_idx);
+                    self.heapify_down(left_child_idx);
+                }
+            } else if D == 1 {
+                if this_val < left_val {
+                    self.swap(i, left_child_idx);
+                    self.heapify_down(left_child_idx);
+                }
             }
             return;
         }
 
         let right_val = self.get(right_child_idx);
-        if left_val > right_val && this_val > right_val {
-            self.swap(i, right_child_idx);
-            self.heapify_down(right_child_idx);
-        } else if right_val > left_val && this_val > left_val {
-            self.swap(i, left_child_idx);
-            self.heapify_down(left_child_idx);
+        if D == -1 {
+            if left_val > right_val && this_val > right_val {
+                self.swap(i, right_child_idx);
+                self.heapify_down(right_child_idx);
+            } else if right_val > left_val && this_val > left_val {
+                self.swap(i, left_child_idx);
+                self.heapify_down(left_child_idx);
+            }
+        } else if D == 1 {
+            if left_val < right_val && this_val < right_val {
+                self.swap(i, right_child_idx);
+                self.heapify_down(right_child_idx);
+            } else if right_val < left_val && this_val < left_val {
+                self.swap(i, left_child_idx);
+                self.heapify_down(left_child_idx);
+            }
         }
     }
 
@@ -178,13 +199,34 @@ impl<T: Copy + std::cmp::PartialOrd + std::fmt::Debug> RingHeap<T> {
     }
 }
 
+impl<T, const D: i8> std::fmt::Debug for RingHeap<T, D>
+where
+    T: std::fmt::Debug + std::cmp::PartialOrd + std::marker::Copy,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = String::new();
+        write!(s, "[")?;
+        for i in 0..self.len {
+            write!(s, "{:?}, ", self.get(i))?;
+        }
+        write!(s, "]")?;
+        f.debug_struct("RingHeap")
+            .field("data", &self.data)
+            .field("len", &self.len)
+            .field("start", &self.start)
+            .field("end", &self.end)
+            .field("virtual heap", &s)
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::RingHeap;
 
     #[test]
     fn inserts_correctly() {
-        let mut heap = RingHeap::<i32>::new();
+        let mut heap = RingHeap::<i32, -1>::new();
 
         assert_eq!(heap.data.len(), 0);
         assert_eq!(heap.len, 0);
@@ -214,99 +256,130 @@ mod test {
         assert_eq!(heap.peek(), Some(1));
     }
 
-    // #[test]
-    // fn pops_correctly() {
-    //     let mut heap = RingHeap::<i32>::new();
-    //     heap.insert(2);
-    //     heap.insert(1);
-    //     heap.insert(4);
-    //     heap.insert(6);
-    //     heap.insert(-1);
-    //     heap.insert(-3);
-    //     heap.insert(3);
-    //     assert_eq!(heap.data.len(), 8);
-    //     assert_eq!(heap.len, 7);
-    //     assert_eq!(heap.start, 0);
-    //     assert_eq!(heap.end, 7);
-    //
-    //     // NOTE: pop shifts .start upwards, without touching the .data or .end
-    //     assert_eq!(heap.pop(), Some(-3));
-    //     assert_eq!(heap.len, 6);
-    //     assert_eq!(heap.start, 1);
-    //     assert_eq!(heap.end, 7);
-    //
-    //     assert_eq!(heap.pop(), Some(-1));
-    //     assert_eq!(heap.len, 5);
-    //     assert_eq!(heap.start, 2);
-    //     assert_eq!(heap.end, 7);
-    //
-    //     assert_eq!(heap.pop(), Some(1));
-    //     assert_eq!(heap.len, 4);
-    //     assert_eq!(heap.start, 3);
-    //     assert_eq!(heap.end, 7);
-    //
-    //     assert_eq!(heap.pop(), Some(2));
-    //     assert_eq!(heap.len, 3);
-    //     assert_eq!(heap.start, 4);
-    //     assert_eq!(heap.end, 7);
-    //
-    //     assert_eq!(heap.pop(), Some(3));
-    //     assert_eq!(heap.len, 2);
-    //     assert_eq!(heap.start, 5);
-    //     assert_eq!(heap.end, 7);
-    //
-    //     assert_eq!(heap.pop(), Some(4));
-    //     assert_eq!(heap.len, 1);
-    //     assert_eq!(heap.start, 6);
-    //     assert_eq!(heap.end, 7);
-    //
-    //     assert_eq!(heap.pop(), Some(6));
-    //     assert_eq!(heap.len, 0);
-    //     assert_eq!(heap.start, 7);
-    //     assert_eq!(heap.end, 7);
-    //
-    //     assert_eq!(heap.pop(), None);
-    //     assert_eq!(heap.len, 0);
-    //     assert_eq!(heap.start, 7);
-    //     assert_eq!(heap.end, 7);
-    //
-    //     assert_eq!(heap.data.len(), 8);
-    // }
-    //
-    // #[test]
-    // fn complex_example() {
-    //     let mut heap = RingHeap::<i32>::new();
-    //     heap.insert(12);
-    //     assert_eq!(heap.peek(), Some(12));
-    //     heap.insert(10);
-    //     assert_eq!(heap.peek(), Some(10));
-    //     assert_eq!(heap.pop(), Some(10));
-    //     assert_eq!(heap.pop(), Some(12));
-    //     assert_eq!(heap.pop(), None);
-    //
-    //     dbg!(&heap);
-    //     heap.insert(5);
-    //     assert_eq!(heap.peek(), Some(5));
-    //     dbg!(&heap);
-    //     heap.insert(-5);
-    //     assert_eq!(heap.peek(), Some(-5));
-    //     dbg!(&heap);
-    //     heap.insert(0);
-    //     assert_eq!(heap.peek(), Some(0));
-    //     dbg!(&heap);
-    //     assert_eq!(heap.pop(), Some(-5));
-    //     dbg!(&heap);
-    //     assert_eq!(heap.peek(), Some(0));
-    //     dbg!(&heap);
-    //
-    //     heap.insert(10);
-    //     heap.insert(-7);
-    //     assert_eq!(heap.pop(), Some(-7));
-    //     assert_eq!(heap.pop(), Some(0));
-    //
-    //     heap.insert(11);
-    //     heap.insert(-7);
-    //     assert_eq!(heap.pop(), Some(-7));
-    //     assert_eq!(heap.peek(), Some(5));
-    // }
+    #[test]
+    fn pops_correctly() {
+        let mut heap = RingHeap::<i32, -1>::new();
+        heap.insert(2);
+        heap.insert(1);
+        heap.insert(4);
+        heap.insert(6);
+        heap.insert(-1);
+        heap.insert(-3);
+        heap.insert(3);
+        assert_eq!(heap.data.len(), 8);
+        assert_eq!(heap.len, 7);
+        assert_eq!(heap.start, 0);
+        assert_eq!(heap.end, 7);
+
+        // NOTE: pop shifts .start upwards, without touching the .data or .end
+        assert_eq!(heap.pop(), Some(-3));
+        assert_eq!(heap.len, 6);
+        assert_eq!(heap.start, 1);
+        assert_eq!(heap.end, 7);
+
+        assert_eq!(heap.pop(), Some(-1));
+        assert_eq!(heap.len, 5);
+        assert_eq!(heap.start, 2);
+        assert_eq!(heap.end, 7);
+
+        assert_eq!(heap.pop(), Some(1));
+        assert_eq!(heap.len, 4);
+        assert_eq!(heap.start, 3);
+        assert_eq!(heap.end, 7);
+
+        assert_eq!(heap.pop(), Some(2));
+        assert_eq!(heap.len, 3);
+        assert_eq!(heap.start, 4);
+        assert_eq!(heap.end, 7);
+
+        assert_eq!(heap.pop(), Some(3));
+        assert_eq!(heap.len, 2);
+        assert_eq!(heap.start, 5);
+        assert_eq!(heap.end, 7);
+
+        assert_eq!(heap.pop(), Some(4));
+        assert_eq!(heap.len, 1);
+        assert_eq!(heap.start, 6);
+        assert_eq!(heap.end, 7);
+
+        assert_eq!(heap.pop(), Some(6));
+        assert_eq!(heap.len, 0);
+        assert_eq!(heap.start, 7);
+        assert_eq!(heap.end, 7);
+
+        assert_eq!(heap.pop(), None);
+        assert_eq!(heap.len, 0);
+        assert_eq!(heap.start, 7);
+        assert_eq!(heap.end, 7);
+
+        assert_eq!(heap.data.len(), 8);
+    }
+
+    #[test]
+    fn complex_example_min_heap() {
+        let mut heap = RingHeap::<i32, -1>::new();
+        heap.insert(12);
+        assert_eq!(heap.peek(), Some(12));
+        heap.insert(10);
+        assert_eq!(heap.peek(), Some(10));
+        assert_eq!(heap.pop(), Some(10));
+        assert_eq!(heap.pop(), Some(12));
+        assert_eq!(heap.pop(), None);
+
+        heap.insert(5);
+        assert_eq!(heap.peek(), Some(5));
+
+        heap.insert(-5);
+        assert_eq!(heap.peek(), Some(-5));
+
+        heap.insert(0);
+        assert_eq!(heap.peek(), Some(-5));
+        assert_eq!(heap.pop(), Some(-5));
+        assert_eq!(heap.peek(), Some(0));
+
+        heap.insert(10);
+        heap.insert(-7);
+        assert_eq!(heap.pop(), Some(-7));
+        assert_eq!(heap.pop(), Some(0));
+
+        heap.insert(11);
+        heap.insert(-7);
+        assert_eq!(heap.pop(), Some(-7));
+        assert_eq!(heap.peek(), Some(5));
+    }
+
+    #[test]
+    fn complex_example_max_heap() {
+        let mut heap = RingHeap::<i32, 1>::new();
+        heap.insert(12);
+        assert_eq!(heap.peek(), Some(12));
+        heap.insert(10);
+        assert_eq!(heap.peek(), Some(12));
+        assert_eq!(heap.pop(), Some(12));
+        assert_eq!(heap.pop(), Some(10));
+        assert_eq!(heap.pop(), None);
+
+        heap.insert(-5);
+        assert_eq!(heap.peek(), Some(-5));
+
+        heap.insert(5);
+        assert_eq!(heap.peek(), Some(5));
+
+        heap.insert(0);
+        assert_eq!(heap.peek(), Some(5));
+        assert_eq!(heap.pop(), Some(5));
+        assert_eq!(heap.peek(), Some(0));
+
+        heap.insert(-7);
+        heap.insert(10);
+        dbg!(&heap);
+        assert_eq!(heap.pop(), Some(10));
+        assert_eq!(heap.pop(), Some(0));
+
+        heap.insert(11);
+        heap.insert(-7);
+        assert_eq!(heap.pop(), Some(11));
+        assert_eq!(heap.pop(), Some(-5));
+        assert_eq!(heap.pop(), Some(-7));
+    }
 }
